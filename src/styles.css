@@ -1,0 +1,43 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #111; color: #eee; font-family: system-ui, -apple-system, sans-serif; }
+#app { max-width: 100%; padding: 16px; }
+header h1 { margin: 0 0 4px; font-size: 18px; font-weight: 500; }
+header .hint { margin: 0 0 12px; color: #888; font-size: 12px; }
+main { display: flex; justify-content: center; }
+#sim-canvas {
+  image-rendering: pixelated;
+  background: #000;
+  border: 1px solid #333;
+  cursor: crosshair;
+  max-width: 100%;
+}
+#sim-canvas.hover-charge { cursor: grab; }
+#sim-canvas.dragging { cursor: grabbing; }
+.controls {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 8px 0 12px;
+  font-size: 13px;
+}
+.controls label.control { display: flex; align-items: center; gap: 8px; }
+.controls input[type="range"] { width: 160px; vertical-align: middle; }
+.controls button {
+  background: #222;
+  color: #eee;
+  border: 1px solid #444;
+  padding: 4px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 4px;
+  font-family: inherit;
+}
+.controls button:hover { background: #333; }
+.controls button.active { background: #553; border-color: #886; }
+#q-value {
+  font-variant-numeric: tabular-nums;
+  min-width: 2.5em;
+  display: inline-block;
+  text-align: right;
+}

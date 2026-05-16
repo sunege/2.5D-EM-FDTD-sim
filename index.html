@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D FDTD 電磁場シミュレータ（2.5D）</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>3D FDTD 電磁場シミュレータ</h1>
+        <p class="hint">画面をクリック / タップで電荷を配置（Shift / 右クリックで符号反転）</p>
+        <div class="controls">
+          <label class="control">
+            電荷量:
+            <input type="range" id="q-slider" min="-2" max="2" step="0.1" value="1" />
+            <span id="q-value">+1.0</span>
+          </label>
+          <button id="pause-btn" class="control" type="button">一時停止</button>
+          <button id="reset-btn" class="control" type="button">リセット</button>
+        </div>
+      </header>
+      <main>
+        <canvas id="sim-canvas"></canvas>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
