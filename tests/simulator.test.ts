@@ -10,7 +10,7 @@ describe("Simulator", () => {
     expect(s.stepCount).toBe(0);
   });
 
-  it("places a charge at the z mid-plane and generates a radial field", () => {
+  it("places a dipole that produces outward Ex on the +q side", () => {
     const s = new Simulator({
       Nx: 64,
       Ny: 64,
@@ -22,13 +22,14 @@ describe("Simulator", () => {
       dt: 0.4,
     });
     s.addCharge(32, 32, 1);
-    // Run through the injection window plus a few steps for the field to settle.
+    // Default sigma=2 → d=4, so B (+q end) sits at x=36 and A (−q) at x=28.
+    // Run through injection + propagation so the near-field is established.
     for (let n = 0; n < 30; n++) s.step();
-    const cx = 32, cy = 32, kMid = 10;
-    // Probe Ex a few cells to the +x side of the charge — should be positive (outward).
-    const ex = s.fields.Ex[idx(cx + 4, cy, kMid, s.params.Nx, s.params.Ny)];
+    const kMid = 10;
+    // Probe just outside B (Yee position 36.5, ≈0.5 cells past the +q end).
+    // The +q dominates over the far −q, so Ex must point outward (+x).
+    const ex = s.fields.Ex[idx(36, 32, kMid, s.params.Nx, s.params.Ny)];
     expect(ex).toBeGreaterThan(0);
-    // Energy after injection should be finite and positive.
     expect(s.energy()).toBeGreaterThan(0);
     expect(Number.isFinite(s.energy())).toBe(true);
   });

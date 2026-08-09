@@ -1,4 +1,3 @@
-import type { Charge } from "../sim/charges";
 import { idx } from "../sim/fields";
 import type { Simulator } from "../sim/simulator";
 import { bipolar } from "./colormap";
@@ -84,33 +83,39 @@ export class Renderer {
     const stride = this.opts.vectorStride;
 
     const inv = 1 / this.opts.eScale;
-    const arrowLen = stride * px * 0.45;
+    const arrowLen = stride * px * 0.675;
 
-    this.ctx.strokeStyle = "rgba(20, 20, 20, 0.85)";
-    this.ctx.lineWidth = 1.2;
-    this.ctx.lineCap = "round";
-    this.ctx.beginPath();
+    // Collect arrow geometry first so we can draw outline pass then fill pass.
+    type Arrow = { cx: number; cy: number; dx: number; dy: number; head: number; ang: number };
+    const arrows: Arrow[] = [];
     for (let j = stride / 2; j < Ny; j += stride) {
       for (let i = stride / 2; i < Nx; i += stride) {
-        // Center the arrow on the cell center; flip y for canvas coords.
         const cx = (i + 0.5) * px;
         const cy = (Ny - j - 0.5) * px;
         const ii = Math.floor(i);
         const jj = Math.floor(j);
-        // Average to cell center: Ex at (i+0.5, j) → use Ex[i, j]; Ey at (i, j+0.5) → use Ey[i, j]
         const exV = Ex[idx(ii, jj, kMid, Nx, Ny)];
         const eyV = Ey[idx(ii, jj, kMid, Nx, Ny)];
         const m = Math.hypot(exV, eyV) * inv;
         if (m < 0.05) continue;
         const sat = Math.tanh(m);
-        // Flip the y component to match the flipped canvas coordinates.
-        const dx = (exV / Math.hypot(exV, eyV)) * arrowLen * sat;
-        const dy = -(eyV / Math.hypot(exV, eyV)) * arrowLen * sat;
+        const mag = Math.hypot(exV, eyV);
+        const dx = (exV / mag) * arrowLen * sat;
+        const dy = -(eyV / mag) * arrowLen * sat;
+        const ang = Math.atan2(dy, dx);
+        const head = arrowLen * 0.28 * sat;
+        arrows.push({ cx, cy, dx, dy, head, ang });
+      }
+    }
+
+    const drawArrows = () => {
+      this.ctx.beginPath();
+      for (const { cx, cy, dx, dy, head, ang } of arrows) {
+        // Each segment starts with moveTo so they are never joined — prevents
+        // the round lineJoin at the tip from making the arrow look curved.
         this.ctx.moveTo(cx, cy);
         this.ctx.lineTo(cx + dx, cy + dy);
-        // simple arrowhead
-        const ang = Math.atan2(dy, dx);
-        const head = arrowLen * 0.25 * sat;
+        this.ctx.moveTo(cx + dx, cy + dy);
         this.ctx.lineTo(
           cx + dx - head * Math.cos(ang - 0.4),
           cy + dy - head * Math.sin(ang - 0.4),
@@ -121,30 +126,44 @@ export class Renderer {
           cy + dy - head * Math.sin(ang + 0.4),
         );
       }
-    }
-    this.ctx.stroke();
+      this.ctx.stroke();
+    };
+
+    // Outline pass (white/translucent) for contrast on both dark and bright bg.
+    this.ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+    this.ctx.lineWidth = 4.5;
+    this.ctx.lineCap = "round";
+    drawArrows();
+
+    // Fill pass (dark) on top of outline.
+    this.ctx.strokeStyle = "rgba(15, 15, 15, 0.92)";
+    this.ctx.lineWidth = 2.4;
+    drawArrows();
   }
 
   private drawCharges(sim: Simulator): void {
     const { Ny } = sim.params;
     const px = this.opts.pixelsPerCell;
     for (const c of sim.charges) {
-      const x = c.x * px;
-      const y = (Ny - c.y) * px;
       const radius = Math.max(4, c.sigma * px * 0.8);
-      this.ctx.beginPath();
-      this.ctx.arc(x, y, radius, 0, 2 * Math.PI);
-      this.ctx.fillStyle = c.q >= 0 ? "rgba(220, 40, 40, 0.85)" : "rgba(40, 80, 220, 0.85)";
-      this.ctx.fill();
-      this.ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
-      this.ctx.lineWidth = 1;
-      this.ctx.stroke();
-      // sign label
-      this.ctx.fillStyle = "white";
-      this.ctx.font = `${Math.round(radius * 1.3)}px sans-serif`;
-      this.ctx.textAlign = "center";
-      this.ctx.textBaseline = "middle";
-      this.ctx.fillText(c.q >= 0 ? "+" : "−", x, y);
+      // B holds +q (red when q>0); A holds −q (blue when q>0).
+      this.drawMarker(c.xB * px, (Ny - c.yB) * px, radius, c.q >= 0);
+      this.drawMarker(c.xA * px, (Ny - c.yA) * px, radius, c.q < 0);
     }
+  }
+
+  private drawMarker(x: number, y: number, radius: number, positive: boolean): void {
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, radius, 0, 2 * Math.PI);
+    this.ctx.fillStyle = positive ? "rgba(220, 40, 40, 0.85)" : "rgba(40, 80, 220, 0.85)";
+    this.ctx.fill();
+    this.ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
+    this.ctx.lineWidth = 1;
+    this.ctx.stroke();
+    this.ctx.fillStyle = "white";
+    this.ctx.font = `${Math.round(radius * 1.3)}px sans-serif`;
+    this.ctx.textAlign = "center";
+    this.ctx.textBaseline = "middle";
+    this.ctx.fillText(positive ? "+" : "−", x, y);
   }
 }

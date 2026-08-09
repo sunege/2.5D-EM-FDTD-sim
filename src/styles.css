@@ -11,8 +11,6 @@ main { display: flex; justify-content: center; }
   cursor: crosshair;
   max-width: 100%;
 }
-#sim-canvas.hover-charge { cursor: grab; }
-#sim-canvas.dragging { cursor: grabbing; }
 .controls {
   display: flex;
   gap: 16px;

@@ -1,6 +1,6 @@
 import { Renderer } from "../render/renderer";
-import type { Charge } from "../sim/charges";
 import { defaultParams } from "../sim/params";
+import type { DipoleCharge } from "../sim/charges";
 import { Simulator } from "../sim/simulator";
 import { eventToGrid } from "./input";
 
@@ -8,8 +8,17 @@ const PIXELS_PER_CELL = 5;
 const CHARGE_SIGMA = 4;
 const CHARGE_INJECT_STEPS = 10;
 const STEPS_PER_FRAME = 1;
-const BZ_SCALE = 0.00002;
-const E_SCALE = 0.0004;
+const BZ_SCALE = 0.0004;
+const E_SCALE = 0.0002;
+
+// Hit radius in grid cells for dragging a charge endpoint.
+const HIT_RADIUS_CELLS = 1.5;
+
+// Maximum drag speed in units of c (c=1 in sim units). Capping at sub-luminal
+// speed prevents the PIC ghost-charge artifact: if v >> c, the charge
+// teleports multiple σ in one step and J is deposited at the old position
+// while the charge density appears at the new position, leaving ∇·E ≠ 0.
+const MAX_DRAG_SPEED = 0.5;
 
 function requireEl<T extends HTMLElement>(id: string, ctor: new () => T): T {
   const el = document.getElementById(id);
@@ -17,13 +26,15 @@ function requireEl<T extends HTMLElement>(id: string, ctor: new () => T): T {
   return el;
 }
 
-// Hit-test: returns the topmost charge at (gx, gy), or null. Radius matches
-// the visual marker drawn by the renderer (max(2, 0.8·σ) grid cells).
-function hitChargeAt(charges: Charge[], gx: number, gy: number): Charge | null {
-  for (let k = charges.length - 1; k >= 0; k--) {
-    const c = charges[k];
-    const radius = Math.max(2, c.sigma * 0.8);
-    if (Math.hypot(c.x - gx, c.y - gy) <= radius) return c;
+function hitChargeEndpoint(
+  sim: Simulator,
+  gx: number,
+  gy: number,
+): { charge: DipoleCharge; endpoint: "A" | "B" } | null {
+  for (const c of sim.charges) {
+    const hr = Math.max(HIT_RADIUS_CELLS, c.sigma * 0.8);
+    if (Math.hypot(gx - c.xB, gy - c.yB) <= hr) return { charge: c, endpoint: "B" };
+    if (Math.hypot(gx - c.xA, gy - c.yA) <= hr) return { charge: c, endpoint: "A" };
   }
   return null;
 }
@@ -44,8 +55,18 @@ export function startApp(): void {
   });
 
   let paused = false;
-  let dragging: Charge | null = null;
-  let dragPointerId: number | null = null;
+
+  // Drag state: tracks which endpoint is being dragged and the pointer's
+  // current grid position. Velocity is recomputed each frame in tick() as
+  // (target − physics_position) / dt so the charge reaches the pointer in
+  // exactly STEPS_PER_FRAME FDTD steps without position jumps.
+  let dragging: {
+    charge: DipoleCharge;
+    endpoint: "A" | "B";
+    pointerId: number;
+    targetGx: number;
+    targetGy: number;
+  } | null = null;
 
   const formatQ = (q: number) => (q >= 0 ? `+${q.toFixed(1)}` : q.toFixed(1));
   const refreshQDisplay = () => {
@@ -54,49 +75,28 @@ export function startApp(): void {
   refreshQDisplay();
   qSlider.addEventListener("input", refreshQDisplay);
 
-  const endDrag = () => {
-    if (!dragging) return;
-    // Snap target back to current position so the motion deposit stops on
-    // the next step — this produces a small deceleration radiation pulse,
-    // which is the physically correct behavior of "letting go" of a charge.
-    dragging.targetX = dragging.x;
-    dragging.targetY = dragging.y;
-    dragging = null;
-    dragPointerId = null;
-    canvas.classList.remove("dragging");
-  };
-
   pauseBtn.addEventListener("click", () => {
     paused = !paused;
     pauseBtn.textContent = paused ? "再開" : "一時停止";
     pauseBtn.classList.toggle("active", paused);
-    // While paused, no FDTD steps run; let go of any drag so the charge
-    // doesn't drift the moment we unpause.
-    if (paused) endDrag();
   });
 
   resetBtn.addEventListener("click", () => {
-    endDrag();
     sim.reset();
+    dragging = null;
   });
 
   canvas.addEventListener("pointerdown", (evt) => {
     const { gx, gy } = eventToGrid(canvas, evt, sim.params.Nx, sim.params.Ny, PIXELS_PER_CELL);
 
-    // Drag an existing charge if the press lands on its marker (and we're
-    // not paused — no deposit happens while paused, so dragging is futile).
-    if (!paused) {
-      const hit = hitChargeAt(sim.charges, gx, gy);
-      if (hit) {
-        dragging = hit;
-        dragPointerId = evt.pointerId;
-        canvas.setPointerCapture(evt.pointerId);
-        canvas.classList.add("dragging");
-        return;
-      }
+    // Drag existing endpoint if close enough; otherwise place a new charge.
+    const hit = hitChargeEndpoint(sim, gx, gy);
+    if (hit) {
+      canvas.setPointerCapture(evt.pointerId);
+      dragging = { charge: hit.charge, endpoint: hit.endpoint, pointerId: evt.pointerId, targetGx: gx, targetGy: gy };
+      return;
     }
 
-    // Otherwise place a new charge using the slider value.
     const base = Number(qSlider.value);
     const flip = evt.shiftKey || evt.button === 2;
     const q = flip ? -base : base;
@@ -105,28 +105,56 @@ export function startApp(): void {
   });
 
   canvas.addEventListener("pointermove", (evt) => {
+    if (!dragging || evt.pointerId !== dragging.pointerId) return;
     const { gx, gy } = eventToGrid(canvas, evt, sim.params.Nx, sim.params.Ny, PIXELS_PER_CELL);
-    if (dragging) {
-      dragging.targetX = gx;
-      dragging.targetY = gy;
-      return;
-    }
-    // Hover cursor feedback so users discover that charges are draggable.
-    const hovering = hitChargeAt(sim.charges, gx, gy) !== null;
-    canvas.classList.toggle("hover-charge", hovering && !paused);
+    // Only update the target; velocity is computed in tick() each frame so
+    // the physics position smoothly tracks the pointer via advancePositions.
+    dragging.targetGx = gx;
+    dragging.targetGy = gy;
   });
 
-  const releaseHandler = (evt: PointerEvent) => {
-    if (dragPointerId !== null && evt.pointerId === dragPointerId) endDrag();
+  const endDrag = (pointerId: number) => {
+    if (!dragging || dragging.pointerId !== pointerId) return;
+    // Zero velocity so advancePositions does not carry the charge further.
+    const c = dragging.charge;
+    if (dragging.endpoint === "B") { c.vxB = 0; c.vyB = 0; }
+    else { c.vxA = 0; c.vyA = 0; }
+    dragging = null;
   };
-  canvas.addEventListener("pointerup", releaseHandler);
-  canvas.addEventListener("pointercancel", releaseHandler);
+  canvas.addEventListener("pointerup", (evt) => endDrag(evt.pointerId));
+  canvas.addEventListener("pointercancel", (evt) => endDrag(evt.pointerId));
 
   // Prevent the context menu so right-click can place negative charges.
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
+  document.addEventListener("keydown", (e) => {
+    if (e.code === "Space" && !e.repeat) {
+      e.preventDefault();
+      pauseBtn.click();
+    }
+  });
+
   function tick(): void {
     if (!paused) {
+      // Recompute velocity each frame so the physics position reaches the
+      // pointer target in exactly STEPS_PER_FRAME steps, without jumping.
+      if (dragging) {
+        const c = dragging.charge;
+        const dtFrame = sim.params.dt * STEPS_PER_FRAME;
+        if (dragging.endpoint === "B") {
+          let vx = (dragging.targetGx - c.xB) / dtFrame;
+          let vy = (dragging.targetGy - c.yB) / dtFrame;
+          const spd = Math.hypot(vx, vy);
+          if (spd > MAX_DRAG_SPEED) { vx *= MAX_DRAG_SPEED / spd; vy *= MAX_DRAG_SPEED / spd; }
+          c.vxB = vx; c.vyB = vy;
+        } else {
+          let vx = (dragging.targetGx - c.xA) / dtFrame;
+          let vy = (dragging.targetGy - c.yA) / dtFrame;
+          const spd = Math.hypot(vx, vy);
+          if (spd > MAX_DRAG_SPEED) { vx *= MAX_DRAG_SPEED / spd; vy *= MAX_DRAG_SPEED / spd; }
+          c.vxA = vx; c.vyA = vy;
+        }
+      }
       for (let i = 0; i < STEPS_PER_FRAME; i++) sim.step();
     }
     renderer.draw(sim);
